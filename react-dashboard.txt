@@ -1,0 +1,376 @@
+// src/components/Dashboard.jsx
+import React, { useState, useEffect } from 'react';
+import axios from 'axios';
+import { 
+  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
+  AreaChart, Area
+} from 'recharts';
+import { AlertCircle, ArrowUp, ArrowDown, DollarSign, Clock, Activity } from 'lucide-react';
+
+const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000';
+
+const Dashboard = () => {
+  const [authToken, setAuthToken] = useState(localStorage.getItem('authToken'));
+  const [marketData, setMarketData] = useState([]);
+  const [symbol, setSymbol] = useState('BTCUSDT');
+  const [predictions, setPredictions] = useState(null);
+  const [accountInfo, setAccountInfo] = useState(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [orderAmount, setOrderAmount] = useState(0.001);
+  const [orderStatus, setOrderStatus] = useState(null);
+
+  // Configurar o cliente axios com o token de autenticação
+  const apiClient = axios.create({
+    baseURL: API_BASE_URL,
+    headers: {
+      'Authorization': `Bearer ${authToken}`
+    }
+  });
+
+  useEffect(() => {
+    // Carregar dados iniciais
+    if (authToken) {
+      fetchMarketData();
+      fetchAccountInfo();
+      fetchPredictions();
+    }
+    
+    // Configurar atualização periódica
+    const intervalId = setInterval(() => {
+      fetchMarketData();
+    }, 30000); // Atualizar a cada 30 segundos
+    
+    return () => clearInterval(intervalId);
+  }, [authToken, symbol]);
+
+  const fetchMarketData = async () => {
+    try {
+      setIsLoading(true);
+      const response = await apiClient.get(`/api/market/${symbol}`);
+      const priceHistory = await apiClient.get(`/api/history/${symbol}?interval=1h&limit=24`);
+      
+      setMarketData(priceHistory.data.data);
+      setIsLoading(false);
+    } catch (err) {
+      setError('Erro ao carregar dados de mercado');
+      setIsLoading(false);
+      console.error(err);
+    }
+  };
+
+  const fetchPredictions = async () => {
+    try {
+      const response = await apiClient.post('/api/predict', {
+        symbol: symbol,
+        interval: '1h',
+        lookback: '30 days'
+      });
+      setPredictions(response.data);
+    } catch (err) {
+      console.error('Erro ao carregar previsões:', err);
+    }
+  };
+
+  const fetchAccountInfo = async () => {
+    try {
+      const response = await apiClient.get('/api/account');
+      setAccountInfo(response.data);
+    } catch (err) {
+      console.error('Erro ao carregar informações da conta:', err);
+    }
+  };
+
+  const executeOrder = async (side) => {
+    try {
+      setOrderStatus({ status: 'pending', message: `Executando ordem: ${side} ${orderAmount} ${symbol}` });
+      
+      const response = await apiClient.post('/api/trade', {
+        symbol: symbol,
+        side: side,
+        quantity: parseFloat(orderAmount),
+        type: 'MARKET'
+      });
+      
+      setOrderStatus({
+        status: 'success',
+        message: `Ordem executada com sucesso: ${side} ${orderAmount} ${symbol}`,
+        data: response.data
+      });
+      
+      // Atualizar saldo e dados após a ordem
+      fetchAccountInfo();
+      fetchMarketData();
+    } catch (err) {
+      setOrderStatus({
+        status: 'error',
+        message: `Erro ao executar ordem: ${err.response?.data?.detail || err.message}`
+      });
+      console.error('Erro na execução da ordem:', err);
+    }
+  };
+
+  // Formatar preço para exibição
+  const formatPrice = (price) => {
+    return parseFloat(price).toLocaleString('pt-BR', {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2
+    });
+  };
+
+  // Renderizar indicador de sinal
+  const renderSignal = () => {
+    if (!predictions) return null;
+    
+    const { signal, percent_change } = predictions;
+    const percentFormatted = (percent_change * 100).toFixed(2);
+    
+    if (signal === 'comprar') {
+      return (
+        <div className="flex items-center bg-green-100 text-green-800 p-4 rounded-lg">
+          <ArrowUp className="mr-2" />
+          <span>Sinal: COMPRAR ({percentFormatted}%)</span>
+        </div>
+      );
+    } else if (signal === 'vender') {
+      return (
+        <div className="flex items-center bg-red-100 text-red-800 p-4 rounded-lg">
+          <ArrowDown className="mr-2" />
+          <span>Sinal: VENDER ({percentFormatted}%)</span>
+        </div>
+      );
+    } else {
+      return (
+        <div className="flex items-center bg-gray-100 text-gray-800 p-4 rounded-lg">
+          <Activity className="mr-2" />
+          <span>Sinal: MANTER ({percentFormatted}%)</span>
+        </div>
+      );
+    }
+  };
+
+  // Renderizar cartões de informação da conta
+  const renderAccountCards = () => {
+    if (!accountInfo) return null;
+    
+    const btcBalance = accountInfo.balances.find(b => b.asset === 'BTC');
+    const usdtBalance = accountInfo.balances.find(b => b.asset === 'USDT');
+    
+    return (
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+        <div className="bg-white p-4 rounded-lg shadow">
+          <h3 className="text-lg font-medium text-gray-700">BTC Disponível</h3>
+          <p className="text-2xl font-bold">{btcBalance?.free || '0'}</p>
+        </div>
+        <div className="bg-white p-4 rounded-lg shadow">
+          <h3 className="text-lg font-medium text-gray-700">USDT Disponível</h3>
+          <p className="text-2xl font-bold">{usdtBalance?.free || '0'}</p>
+        </div>
+        <div className="bg-white p-4 rounded-lg shadow">
+          <h3 className="text-lg font-medium text-gray-700">Preço Atual</h3>
+          <p className="text-2xl font-bold">${predictions?.current_price ? formatPrice(predictions.current_price) : '0.00'}</p>
+        </div>
+      </div>
+    );
+  };
+
+  // Renderizar gráfico de preços
+  const renderPriceChart = () => {
+    if (isLoading || !marketData.length) {
+      return <div className="flex justify-center p-8">Carregando dados...</div>;
+    }
+    
+    return (
+      <div className="bg-white p-4 rounded-lg shadow mb-6">
+        <h2 className="text-xl font-bold mb-4">Histórico de Preços - {symbol}</h2>
+        <ResponsiveContainer width="100%" height={300}>
+          <AreaChart
+            data={marketData}
+            margin={{ top: 5, right: 30, left: 20, bottom: 5 }}
+          >
+            <CartesianGrid strokeDasharray="3 3" />
+            <XAxis dataKey="time" />
+            <YAxis />
+            <Tooltip />
+            <Legend />
+            <Area type="monotone" dataKey="close" stroke="#8884d8" fill="#8884d8" fillOpacity={0.3} />
+          </AreaChart>
+        </ResponsiveContainer>
+      </div>
+    );
+  };
+
+  // Renderizar painel de execução de ordens
+  const renderOrderPanel = () => {
+    return (
+      <div className="bg-white p-4 rounded-lg shadow">
+        <h2 className="text-xl font-bold mb-4">Executar Ordem</h2>
+        <div className="flex flex-col space-y-4">
+          <div>
+            <label className="block text-gray-700 mb-2">Quantidade</label>
+            <input
+              type="number"
+              value={orderAmount}
+              onChange={(e) => setOrderAmount(e.target.value)}
+              className="w-full p-2 border rounded"
+              step="0.0001"
+              min="0.0001"
+            />
+          </div>
+          <div className="flex space-x-4">
+            <button
+              onClick={() => executeOrder('BUY')}
+              className="flex-1 bg-green-500 hover:bg-green-600 text-white py-2 px-4 rounded"
+            >
+              Comprar
+            </button>
+            <button
+              onClick={() => executeOrder('SELL')}
+              className="flex-1 bg-red-500 hover:bg-red-600 text-white py-2 px-4 rounded"
+            >
+              Vender
+            </button>
+          </div>
+          
+          {orderStatus && (
+            <div className={`mt-4 p-3 rounded ${
+              orderStatus.status === 'success' ? 'bg-green-100 text-green-800' : 
+              orderStatus.status === 'error' ? 'bg-red-100 text-red-800' : 
+              'bg-yellow-100 text-yellow-800'
+            }`}>
+              {orderStatus.message}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  // Se não estiver autenticado, mostrar tela de login
+  if (!authToken) {
+    return <Login setAuthToken={setAuthToken} />;
+  }
+
+  return (
+    <div className="container mx-auto p-4">
+      <h1 className="text-2xl font-bold mb-6">Dashboard de Trading</h1>
+      
+      {/* Seletor de símbolo */}
+      <div className="mb-6">
+        <select 
+          value={symbol}
+          onChange={(e) => setSymbol(e.target.value)}
+          className="p-2 border rounded"
+        >
+          <option value="BTCUSDT">Bitcoin (BTC/USDT)</option>
+          <option value="ETHUSDT">Ethereum (ETH/USDT)</option>
+          <option value="ADAUSDT">Cardano (ADA/USDT)</option>
+          <option value="DOGEUSDT">Dogecoin (DOGE/USDT)</option>
+        </select>
+        <button 
+          onClick={fetchPredictions}
+          className="ml-2 p-2 bg-blue-500 text-white rounded"
+        >
+          Atualizar Previsão
+        </button>
+      </div>
+      
+      {/* Cartões de informações */}
+      {renderAccountCards()}
+      
+      {/* Sinal de trading */}
+      {renderSignal()}
+      
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mt-6">
+        {/* Gráfico de preços */}
+        <div className="lg:col-span-2">
+          {renderPriceChart()}
+        </div>
+        
+        {/* Painel de ordens */}
+        <div className="lg:col-span-1">
+          {renderOrderPanel()}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// Componente de Login
+const Login = ({ setAuthToken }) => {
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState(null);
+  const [isLoading, setIsLoading] = useState(false);
+
+  const handleLogin = async (e) => {
+    e.preventDefault();
+    setIsLoading(true);
+    setError(null);
+    
+    try {
+      const formData = new FormData();
+      formData.append('username', username);
+      formData.append('password', password);
+      
+      const response = await axios.post(`${API_BASE_URL}/token`, formData);
+      
+      if (response.data.access_token) {
+        localStorage.setItem('authToken', response.data.access_token);
+        setAuthToken(response.data.access_token);
+      }
+    } catch (err) {
+      setError('Falha na autenticação. Verifique suas credenciais.');
+      console.error('Erro de login:', err);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-gray-100">
+      <div className="bg-white p-8 rounded-lg shadow-md w-full max-w-md">
+        <h1 className="text-2xl font-bold mb-6 text-center">Sistema de Trading</h1>
+        
+        {error && (
+          <div className="bg-red-100 text-red-700 p-3 rounded mb-4 flex items-center">
+            <AlertCircle size={20} className="mr-2" />
+            {error}
+          </div>
+        )}
+        
+        <form onSubmit={handleLogin}>
+          <div className="mb-4">
+            <label className="block text-gray-700 mb-2">Usuário</label>
+            <input
+              type="text"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              className="w-full p-2 border rounded"
+              required
+            />
+          </div>
+          <div className="mb-6">
+            <label className="block text-gray-700 mb-2">Senha</label>
+            <input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              className="w-full p-2 border rounded"
+              required
+            />
+          </div>
+          <button
+            type="submit"
+            className="w-full bg-blue-500 hover:bg-blue-600 text-white py-2 px-4 rounded"
+            disabled={isLoading}
+          >
+            {isLoading ? 'Autenticando...' : 'Entrar'}
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+};
+
+export default Dashboard;
